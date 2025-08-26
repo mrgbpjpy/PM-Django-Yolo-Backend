@@ -4,6 +4,7 @@ import uuid
 import cv2
 import numpy as np
 import tempfile
+import subprocess
 
 from django.conf import settings
 from django.http import (
@@ -19,7 +20,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser
 from .models import VideoJob
 
-# For signed video URLs
+# Signed URLs
 _signer = TimestampSigner(settings.SECRET_KEY)
 
 
@@ -28,62 +29,108 @@ def _abs(request, path: str) -> str:
     return request.build_absolute_uri(path)
 
 
-def _process_with_opencv(blob: bytes) -> bytes:
+def _process_with_opencv(blob: bytes, use_yolo: bool = False) -> bytes:
     """
-    Demo OpenCV pipeline:
+    Video pipeline:
     - Save upload to temp file
-    - Read frames with cv2.VideoCapture
-    - Overlay rectangle + demo text
-    - Write processed video to temp mp4 (H264/mp4v)
-    - Return final bytes
+    - Process frames (OpenCV or YOLO)
+    - Write output
+    - Re-encode with ffmpeg for browser playback
+    - Return processed bytes
     """
     in_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     in_file.write(blob)
     in_file.flush()
     in_file.close()
 
-    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    out_file.close()
+    raw_out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    raw_out.close()
 
     cap = cv2.VideoCapture(in_file.name)
     if not cap.isOpened():
         raise RuntimeError("Failed to open uploaded video")
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # H264/MP4V codec
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    out = cv2.VideoWriter(out_file.name, fourcc, fps, (w, h))
+    out = cv2.VideoWriter(raw_out.name, fourcc, fps, (w, h))
+
+    # Optional YOLO model
+    yolo_model = None
+    if use_yolo:
+        try:
+            from ultralytics import YOLO
+            yolo_model = YOLO("yolov8n.pt")  # small model
+        except ImportError:
+            print("YOLO requested but ultralytics not installed. Falling back to OpenCV only.")
+            yolo_model = None
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        # --- Example overlay (replace with YOLO later) ---
-        cv2.rectangle(frame, (50, 50), (w - 50, h - 50), (0, 0, 255), 4)
-        cv2.putText(
-            frame,
-            "OpenCV DEMO",
-            (60, 100),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            2,
-            (0, 255, 0),
-            3,
-            cv2.LINE_AA,
-        )
+        if yolo_model:
+            results = yolo_model.predict(frame, verbose=False)
+            for r in results:
+                for box in r.boxes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    conf = float(box.conf[0])
+                    cls = int(box.cls[0])
+                    label = f"{yolo_model.names[cls]} {conf:.2f}"
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(
+                        frame,
+                        label,
+                        (x1, y1 - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 255, 0),
+                        2,
+                    )
+        else:
+            # Simple OpenCV demo overlay
+            cv2.rectangle(frame, (50, 50), (w - 50, h - 50), (0, 0, 255), 4)
+            cv2.putText(
+                frame,
+                "OpenCV DEMO",
+                (60, 100),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                2,
+                (0, 255, 0),
+                3,
+                cv2.LINE_AA,
+            )
 
         out.write(frame)
 
     cap.release()
     out.release()
 
-    with open(out_file.name, "rb") as f:
+    # Final re-encode for browser playback
+    final_out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    final_out.close()
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", raw_out.name,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-movflags", "+faststart",
+            final_out.name,
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    with open(final_out.name, "rb") as f:
         processed_blob = f.read()
 
-    # Cleanup temp files
+    # Cleanup
     os.unlink(in_file.name)
-    os.unlink(out_file.name)
+    os.unlink(raw_out.name)
+    os.unlink(final_out.name)
 
     return processed_blob
 
@@ -92,7 +139,7 @@ def _process_with_opencv(blob: bytes) -> bytes:
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
 def upload_view(request):
-    """Upload + process video with OpenCV overlay."""
+    """Upload + process video (OpenCV or YOLO overlay)."""
     f = request.FILES.get("file")
     if not f:
         return HttpResponseBadRequest("Missing 'file'")
@@ -101,7 +148,9 @@ def upload_view(request):
 
     # Process
     try:
-        processed = _process_with_opencv(blob)
+        # Toggle YOLO with query param ?yolo=1
+        use_yolo = request.GET.get("yolo") == "1"
+        processed = _process_with_opencv(blob, use_yolo=use_yolo)
         status, error = "DONE", ""
     except Exception as e:
         processed, status, error = None, "ERROR", str(e)
@@ -116,7 +165,7 @@ def upload_view(request):
         error=error,
     )
 
-    # Signed access URLs
+    # Signed URLs
     token = _signer.sign(str(job.id))
     play_url = _abs(request, reverse("video_get", args=[job.id])) + f"?t={token}"
     download_url = play_url + "&download=1"
@@ -142,7 +191,7 @@ def video_view(request, job_id):
         return HttpResponseBadRequest("Missing token")
 
     try:
-        unsigned = _signer.unsign(token, max_age=600)  # 10 min validity
+        unsigned = _signer.unsign(token, max_age=600)
     except SignatureExpired:
         return HttpResponseBadRequest("Token expired")
     except BadSignature:
