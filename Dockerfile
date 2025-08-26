@@ -27,5 +27,6 @@ RUN python manage.py collectstatic --noinput || true
 # Railway injects $PORT, default to 8000 for local dev
 EXPOSE 8000
 
-# Start gunicorn, binding to $PORT
-CMD ["sh", "-c", "gunicorn mysite.wsgi:application --bind 0.0.0.0:${PORT:-8000}"]
+# Start gunicorn — bind to Railway's dynamic $PORT
+CMD ["sh", "-c", "gunicorn mysite.wsgi:application --bind 0.0.0.0:$PORT"]
+
