@@ -5,6 +5,13 @@ Django 5.x
 from pathlib import Path
 import os
 from datetime import timedelta
+from videos import views as video_views
+
+urlpatterns = [
+    # ...
+    path("api/upload/", video_views.upload_view, name="upload"),
+    path("api/video/<uuid:job_id>/", video_views.video_view, name="video_get"),
+]
 
 # ---------- Paths ----------
 BASE_DIR = Path(__file__).resolve().parent.parent
