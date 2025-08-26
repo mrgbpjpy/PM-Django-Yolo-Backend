@@ -14,14 +14,15 @@ djangorestframework-simplejwt==5.3.1  # JWT auth
 # --- Video pipeline (CPU-only) ---
 numpy==2.0.2
 opencv-python-headless==4.10.0.84   # OpenCV without GUI, safe for Railway
+ffmpeg-python==0.2.0                # Re-encode processed video so browsers can play
 
-# --- OPTIONAL: YOLOv8 (heavy: pulls PyTorch CPU, may exceed Railway free limits) ---
-# If you want YOLO overlays, uncomment below.
+# --- OPTIONAL: YOLOv8 (heavy: pulls PyTorch CPU, may exceed Railway free tier) ---
+# Uncomment below if you want YOLOv8 tracking/overlay
 # ultralytics==8.2.103
 # torch==2.3.1+cpu
 # torchvision==0.18.1+cpu
 
 # Notes:
-# - Keep YOLO commented if you just want OpenCV overlay/processing.
-# - Railway free tier may not have enough memory for torch+ultralytics.
-# - For serious YOLO use, deploy with a GPU-enabled VM or offload to an async worker.
+# - Keep YOLO commented if you only need OpenCV overlays (lighter, deploys faster).
+# - Railway free tier may not have enough memory for torch + ultralytics.
+# - For YOLO in production, consider GPU-enabled VM or async worker.
