@@ -8,21 +8,24 @@ RUN apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
+# Set workdir
 WORKDIR /app
 
 # Copy Python deps
 COPY requirements.txt .
 
+# Install Python deps
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Copy app source
+# Copy project files
 COPY . .
 
-# Collect static files
+# Collect static files (safe fallback)
 RUN python manage.py collectstatic --noinput || true
 
+# Expose default port
 EXPOSE 8000
 
-# ✅ Use shell so $PORT is expanded
+# ✅ Use shell form so $PORT expands correctly
 CMD sh -c "gunicorn mysite.wsgi:application --bind 0.0.0.0:${PORT:-8000}"
