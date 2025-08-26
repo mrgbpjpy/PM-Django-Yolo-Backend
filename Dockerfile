@@ -8,21 +8,24 @@ RUN apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
+# Set work directory
 WORKDIR /app
 
-# Copy Python deps
+# Copy requirements first for caching
 COPY requirements.txt .
 
+# Install Python deps
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Copy app source
+# Copy project files
 COPY . .
 
-# Collect static files
+# Optional: collect static files (skip errors if DB not ready)
 RUN python manage.py collectstatic --noinput || true
 
+# Railway injects $PORT, default to 8000 for local dev
 EXPOSE 8000
 
-# Start gunicorn
-CMD ["gunicorn", "mysite.wsgi:application", "--bind", "0.0.0.0:8000"]
+# Start gunicorn, binding to $PORT
+CMD ["sh", "-c", "gunicorn mysite.wsgi:application --bind 0.0.0.0:${PORT:-8000}"]
