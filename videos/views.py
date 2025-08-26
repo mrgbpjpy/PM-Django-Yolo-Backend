@@ -1,8 +1,9 @@
 # videos/views.py
-import io
+import os
 import uuid
 import cv2
 import numpy as np
+import tempfile
 
 from django.conf import settings
 from django.http import (
@@ -18,6 +19,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser
 from .models import VideoJob
 
+# For signed video URLs
 _signer = TimestampSigner(settings.SECRET_KEY)
 
 
@@ -28,37 +30,41 @@ def _abs(request, path: str) -> str:
 
 def _process_with_opencv(blob: bytes) -> bytes:
     """
-    Simple demo pipeline:
-    - Decode video from bytes
-    - Draw overlay on each frame
-    - Encode back to mp4 (H264 in mp4 container)
+    Demo OpenCV pipeline:
+    - Save upload to temp file
+    - Read frames with cv2.VideoCapture
+    - Overlay rectangle + demo text
+    - Write processed video to temp mp4 (H264/mp4v)
+    - Return final bytes
     """
-    # Write input blob to buffer file for cv2.VideoCapture
-    in_buf = "/tmp/input.mp4"
-    out_buf = "/tmp/output.mp4"
-    with open(in_buf, "wb") as f:
-        f.write(blob)
+    in_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    in_file.write(blob)
+    in_file.flush()
+    in_file.close()
 
-    cap = cv2.VideoCapture(in_buf)
+    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    out_file.close()
+
+    cap = cv2.VideoCapture(in_file.name)
     if not cap.isOpened():
-        raise RuntimeError("Failed to open video for processing")
+        raise RuntimeError("Failed to open uploaded video")
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # H264/MP4V codec
     fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    out = cv2.VideoWriter(out_buf, fourcc, fps, (w, h))
+    out = cv2.VideoWriter(out_file.name, fourcc, fps, (w, h))
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        # --- Demo overlay: red rectangle + YOLO DEMO text ---
+        # --- Example overlay (replace with YOLO later) ---
         cv2.rectangle(frame, (50, 50), (w - 50, h - 50), (0, 0, 255), 4)
         cv2.putText(
             frame,
-            "YOLO DEMO",
+            "OpenCV DEMO",
             (60, 100),
             cv2.FONT_HERSHEY_SIMPLEX,
             2,
@@ -72,9 +78,12 @@ def _process_with_opencv(blob: bytes) -> bytes:
     cap.release()
     out.release()
 
-    # Read processed file back into memory
-    with open(out_buf, "rb") as f:
+    with open(out_file.name, "rb") as f:
         processed_blob = f.read()
+
+    # Cleanup temp files
+    os.unlink(in_file.name)
+    os.unlink(out_file.name)
 
     return processed_blob
 
@@ -83,24 +92,21 @@ def _process_with_opencv(blob: bytes) -> bytes:
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
 def upload_view(request):
+    """Upload + process video with OpenCV overlay."""
     f = request.FILES.get("file")
     if not f:
         return HttpResponseBadRequest("Missing 'file'")
 
-    # Read file bytes
     blob = b"".join(chunk for chunk in f.chunks())
 
-    # --- Process with OpenCV overlay ---
+    # Process
     try:
         processed = _process_with_opencv(blob)
-        status = "DONE"
-        error = ""
+        status, error = "DONE", ""
     except Exception as e:
-        processed = None
-        status = "ERROR"
-        error = str(e)
+        processed, status, error = None, "ERROR", str(e)
 
-    # Save to DB as a new VideoJob
+    # Save DB record
     job = VideoJob.objects.create(
         owner=request.user,
         filename=f.name,
@@ -110,7 +116,7 @@ def upload_view(request):
         error=error,
     )
 
-    # Generate signed access token
+    # Signed access URLs
     token = _signer.sign(str(job.id))
     play_url = _abs(request, reverse("video_get", args=[job.id])) + f"?t={token}"
     download_url = play_url + "&download=1"
@@ -128,14 +134,15 @@ def upload_view(request):
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])  # secured by signed token
+@permission_classes([AllowAny])  # signed token secures access
 def video_view(request, job_id):
+    """Return processed video if token matches."""
     token = request.GET.get("t")
     if not token:
         return HttpResponseBadRequest("Missing token")
 
     try:
-        unsigned = _signer.unsign(token, max_age=600)  # 10 minutes
+        unsigned = _signer.unsign(token, max_age=600)  # 10 min validity
     except SignatureExpired:
         return HttpResponseBadRequest("Token expired")
     except BadSignature:
