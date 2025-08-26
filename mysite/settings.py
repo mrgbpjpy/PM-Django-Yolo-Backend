@@ -5,13 +5,7 @@ Django 5.x
 from pathlib import Path
 import os
 from datetime import timedelta
-from videos import views as video_views
-
-urlpatterns = [
-    # ...
-    path("api/upload/", video_views.upload_view, name="upload"),
-    path("api/video/<uuid:job_id>/", video_views.video_view, name="video_get"),
-]
+from urllib.parse import urlparse
 
 # ---------- Paths ----------
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -34,14 +28,14 @@ DEBUG = env_bool("DJANGO_DEBUG", False)
 ALLOWED_HOSTS = env_list(
     "DJANGO_ALLOWED_HOSTS",
     [
-        "server-lpz7-production.up.railway.app",  # Railway domain
-        ".railway.app",                           # allow other Railway subdomains (optional)
+        "server-lpz7-production.up.railway.app",
+        ".railway.app",
         "localhost",
         "127.0.0.1",
     ],
 )
 
-# CSRF: include scheme. Wildcards (e.g., *.vercel.app) are supported in Django 5+.
+# CSRF: include scheme. Wildcards supported in Django 5+
 CSRF_TRUSTED_ORIGINS = env_list(
     "DJANGO_CSRF_TRUSTED_ORIGINS",
     [
@@ -54,11 +48,8 @@ CSRF_TRUSTED_ORIGINS = env_list(
 # ---------- Security / Proxy ----------
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-# In prod these should be True. Allow override via env for local dev if needed.
 SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", not DEBUG)
 CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", not DEBUG)
-
-# For JWT-in-header (no cross-site cookies), Lax is fine. Bump to "None" only if you truly need cross-site cookies.
 SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
 CSRF_COOKIE_SAMESITE = os.getenv("CSRF_COOKIE_SAMESITE", "Lax")
 
@@ -73,12 +64,12 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
 
     # Third-party
-    "corsheaders",                 # CORS support
-    "rest_framework",              # Django REST Framework
-    "rest_framework_simplejwt",    # JWT auth
+    "corsheaders",
+    "rest_framework",
+    "rest_framework_simplejwt",
 
     # Local apps
-    "videos",                      # your video upload/processing app
+    "videos",
 ]
 
 # ---------- DRF / Auth ----------
@@ -86,10 +77,7 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
-    # Leave permissions to views so you can mix public/protected endpoints.
-    # "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
 }
-
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
@@ -99,11 +87,11 @@ SIMPLE_JWT = {
 # ---------- Middleware ----------
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",     # keep right after Security
+    "whitenoise.middleware.WhiteNoiseMiddleware",
 
     "django.contrib.sessions.middleware.SessionMiddleware",
 
-    "corsheaders.middleware.CorsMiddleware",          # CORS BEFORE CommonMiddleware
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
 
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -133,24 +121,35 @@ TEMPLATES = [
 WSGI_APPLICATION = "mysite.wsgi.application"
 
 # ---------- Database ----------
-# Use Railway Postgres if PG* env vars exist; otherwise fall back to SQLite for local dev.
-if all(k in os.environ for k in ["PGDATABASE", "PGUSER", "PGPASSWORD", "PGHOST", "PGPORT"]):
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.environ["PGDATABASE"],
-            "USER": os.environ["PGUSER"],
-            "PASSWORD": os.environ["PGPASSWORD"],
-            "HOST": os.environ["PGHOST"],
-            "PORT": os.environ["PGPORT"],
-        }
+def pg_from_url(url: str):
+    u = urlparse(url)
+    return {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": (u.path or "").lstrip("/"),
+        "USER": u.username or "",
+        "PASSWORD": u.password or "",
+        "HOST": u.hostname or "",
+        "PORT": str(u.port or "") or "",
+    }
+
+DATABASES = {}
+_db_url = os.getenv("DATABASE_URL") or os.getenv("RAILWAY_DATABASE_URL")
+
+if _db_url:
+    DATABASES["default"] = pg_from_url(_db_url)
+elif all(k in os.environ for k in ("PGDATABASE", "PGUSER", "PGPASSWORD", "PGHOST", "PGPORT")):
+    DATABASES["default"] = {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ["PGDATABASE"],
+        "USER": os.environ["PGUSER"],
+        "PASSWORD": os.environ["PGPASSWORD"],
+        "HOST": os.environ["PGHOST"],
+        "PORT": os.environ["PGPORT"],
     }
 else:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
+    DATABASES["default"] = {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
     }
 
 # ---------- Password validation ----------
@@ -175,18 +174,13 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ---------- CORS (React) ----------
-# Exact origins (NO trailing slash)
 CORS_ALLOWED_ORIGINS = env_list(
     "DJANGO_CORS_ALLOWED_ORIGINS",
     [
-        # Codesandbox example (exact):
         "https://84fl4c.csb.app",
-        # Local dev:
         "http://localhost:3000",
     ],
 )
-
-# Allow preview subdomains (optional convenience)
 CORS_ALLOWED_ORIGIN_REGEXES = env_list(
     "DJANGO_CORS_ALLOWED_ORIGIN_REGEXES",
     [
@@ -194,11 +188,7 @@ CORS_ALLOWED_ORIGIN_REGEXES = env_list(
         r"^https://.*\.csb\.app$",
     ],
 )
-
-# With JWT in Authorization header, you typically don't need cross-site cookies:
 CORS_ALLOW_CREDENTIALS = env_bool("CORS_ALLOW_CREDENTIALS", False)
-
-# If you need extra headers/methods, you can extend like this:
 # from corsheaders.defaults import default_headers, default_methods
 # CORS_ALLOW_HEADERS = list(default_headers) + ["Authorization", "X-CSRFToken"]
 # CORS_ALLOW_METHODS = list(default_methods) + ["PATCH"]
