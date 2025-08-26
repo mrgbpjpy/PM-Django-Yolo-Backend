@@ -1,9 +1,10 @@
 asgiref==3.8.1
 Django==5.0.6
 gunicorn==22.0.0
-psycopg2==2.9.9
+psycopg2-binary==2.9.9       # easier install on Railway than psycopg2 source build
 sqlparse==0.5.0
 whitenoise==6.7.0
 django-cors-headers==4.4.0
-djangorestframework
-djangorestframework-simplejwt
+djangorestframework==3.15.2  # pin a stable version
+djangorestframework-simplejwt==5.3.1  # pin latest stable JWT lib
+
