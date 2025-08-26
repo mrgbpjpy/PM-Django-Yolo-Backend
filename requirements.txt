@@ -1,18 +1,27 @@
+# --- Django core ---
 asgiref==3.8.1
 Django==5.0.6
 gunicorn==22.0.0
-psycopg2-binary==2.9.9           # binary, no build toolchain needed
+psycopg2-binary==2.9.9          # binary build, avoids needing system postgres libs
 sqlparse==0.5.0
-whitenoise==6.7.0
-django-cors-headers==4.4.0
-djangorestframework==3.15.2
-djangorestframework-simplejwt==5.3.1
+whitenoise==6.7.0               # static files in production
 
-# video pipeline (CPU-only, small)
+# --- Django extensions ---
+django-cors-headers==4.4.0      # CORS support
+djangorestframework==3.15.2     # DRF API
+djangorestframework-simplejwt==5.3.1  # JWT auth
+
+# --- Video pipeline (CPU-only) ---
 numpy==2.0.2
-opencv-python-headless==4.10.0.84
+opencv-python-headless==4.10.0.84   # OpenCV without GUI, safe for Railway
 
-# OPTIONAL: YOLOv8 (pulls PyTorch CPU; large & may fail on Railway)
+# --- OPTIONAL: YOLOv8 (heavy: pulls PyTorch CPU, may exceed Railway free limits) ---
+# If you want YOLO overlays, uncomment below.
 # ultralytics==8.2.103
-# torch==2.3.1
-# torchvision==0.18.1
+# torch==2.3.1+cpu
+# torchvision==0.18.1+cpu
+
+# Notes:
+# - Keep YOLO commented if you just want OpenCV overlay/processing.
+# - Railway free tier may not have enough memory for torch+ultralytics.
+# - For serious YOLO use, deploy with a GPU-enabled VM or offload to an async worker.
