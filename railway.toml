@@ -1,2 +1,10 @@
+# railway.toml
+# Railway build & run configuration for Django + ffmpeg
+
 [build]
+# Install ffmpeg system package
 nixpacksPkgs = ["ffmpeg"]
+
+[deploy]
+# Run Django with Gunicorn in production
+startCommand = "gunicorn mysite.wsgi:application --bind 0.0.0.0:$PORT --workers 2"
