@@ -1,11 +1,12 @@
 """
 Django settings for mysite project (Railway + React CORS/CSRF + JWT)
-Django 5.x
 """
+
 from pathlib import Path
 import os
 from datetime import timedelta
 from urllib.parse import urlparse
+from corsheaders.defaults import default_headers, default_methods
 
 # ---------- Paths ----------
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,7 +22,7 @@ def env_list(name: str, default_list):
 # ---------- Core ----------
 SECRET_KEY = os.getenv(
     "DJANGO_SECRET_KEY",
-    "django-insecure-rc^*w^w&6g9_(uvx#6s*bnt!w)l0rdi%!l7mv#y%uc&x%wo5pk",  # dev fallback only
+    "django-insecure-dev-fallback-key",  # fallback only
 )
 DEBUG = env_bool("DJANGO_DEBUG", False)
 
@@ -35,12 +36,13 @@ ALLOWED_HOSTS = env_list(
     ],
 )
 
-# CSRF: include scheme. Wildcards supported in Django 5+
+# CSRF: must include scheme
 CSRF_TRUSTED_ORIGINS = env_list(
     "DJANGO_CSRF_TRUSTED_ORIGINS",
     [
         "https://server-lpz7-production.up.railway.app",
         "https://*.vercel.app",
+        "https://*.csb.app",
         "http://localhost:3000",
     ],
 )
@@ -89,11 +91,10 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
 
-    "django.contrib.sessions.middleware.SessionMiddleware",
-
-    "corsheaders.middleware.CorsMiddleware",
+    "corsheaders.middleware.CorsMiddleware",   # must be before CommonMiddleware
     "django.middleware.common.CommonMiddleware",
 
+    "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -181,14 +182,11 @@ CORS_ALLOWED_ORIGINS = env_list(
         "http://localhost:3000",
     ],
 )
-CORS_ALLOWED_ORIGIN_REGEXES = env_list(
-    "DJANGO_CORS_ALLOWED_ORIGIN_REGEXES",
-    [
-        r"^https://.*\.vercel\.app$",
-        r"^https://.*\.csb\.app$",
-    ],
-)
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
+    r"^https://.*\.csb\.app$",
+]
 CORS_ALLOW_CREDENTIALS = env_bool("CORS_ALLOW_CREDENTIALS", False)
-# from corsheaders.defaults import default_headers, default_methods
-# CORS_ALLOW_HEADERS = list(default_headers) + ["Authorization", "X-CSRFToken"]
-# CORS_ALLOW_METHODS = list(default_methods) + ["PATCH"]
+
+CORS_ALLOW_HEADERS = list(default_headers) + ["authorization", "x-csrftoken"]
+CORS_ALLOW_METHODS = list(default_methods) + ["PATCH"]
