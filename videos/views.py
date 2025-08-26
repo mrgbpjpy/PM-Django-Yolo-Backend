@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import tempfile
 import subprocess
+import urllib.parse
 
 from django.conf import settings
 from django.http import (
@@ -144,8 +145,10 @@ def upload_view(request):
         error=error,
     )
 
+    # Encode token safely for URLs
     token = _signer.sign(str(job.id))
-    play_url = _abs(request, reverse("video_get", args=[job.id])) + f"?t={token}"
+    safe_token = urllib.parse.quote(token, safe="")
+    play_url = _abs(request, reverse("video_get", args=[job.id])) + f"?t={safe_token}"
     download_url = play_url + "&download=1"
 
     return JsonResponse(
