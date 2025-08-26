@@ -25,19 +25,11 @@ _signer = TimestampSigner(settings.SECRET_KEY)
 
 
 def _abs(request, path: str) -> str:
-    """Return absolute URI for a relative path."""
     return request.build_absolute_uri(path)
 
 
 def _process_with_opencv(blob: bytes, use_yolo: bool = False) -> bytes:
-    """
-    Video pipeline:
-    - Save upload to temp file
-    - Process frames (OpenCV or YOLO)
-    - Write output
-    - Re-encode with ffmpeg for browser playback
-    - Return processed bytes
-    """
+    """Process video with OpenCV or YOLO overlay, then re-encode via ffmpeg."""
     in_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     in_file.write(blob)
     in_file.flush()
@@ -56,15 +48,14 @@ def _process_with_opencv(blob: bytes, use_yolo: bool = False) -> bytes:
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     out = cv2.VideoWriter(raw_out.name, fourcc, fps, (w, h))
 
-    # Optional YOLO model
+    # Load YOLO if requested
     yolo_model = None
     if use_yolo:
         try:
             from ultralytics import YOLO
-            yolo_model = YOLO("yolov8n.pt")  # small model
+            yolo_model = YOLO("yolov8n.pt")
         except ImportError:
-            print("YOLO requested but ultralytics not installed. Falling back to OpenCV only.")
-            yolo_model = None
+            print("YOLO requested but ultralytics not installed, falling back to OpenCV.")
 
     while True:
         ret, frame = cap.read()
@@ -81,26 +72,17 @@ def _process_with_opencv(blob: bytes, use_yolo: bool = False) -> bytes:
                     label = f"{yolo_model.names[cls]} {conf:.2f}"
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(
-                        frame,
-                        label,
-                        (x1, y1 - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 255, 0),
-                        2,
+                        frame, label, (x1, y1 - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2
                     )
         else:
-            # Simple OpenCV demo overlay
+            # Fallback demo overlay
             cv2.rectangle(frame, (50, 50), (w - 50, h - 50), (0, 0, 255), 4)
             cv2.putText(
-                frame,
-                "OpenCV DEMO",
+                frame, "OpenCV DEMO",
                 (60, 100),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                2,
-                (0, 255, 0),
-                3,
-                cv2.LINE_AA,
+                2, (0, 255, 0), 3, cv2.LINE_AA
             )
 
         out.write(frame)
@@ -108,7 +90,7 @@ def _process_with_opencv(blob: bytes, use_yolo: bool = False) -> bytes:
     cap.release()
     out.release()
 
-    # Final re-encode for browser playback
+    # Re-encode with ffmpeg for browser playback
     final_out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     final_out.close()
     subprocess.run(
@@ -139,23 +121,20 @@ def _process_with_opencv(blob: bytes, use_yolo: bool = False) -> bytes:
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
 def upload_view(request):
-    """Upload + process video (OpenCV or YOLO overlay)."""
+    """Upload + process video with OpenCV/YOLO overlay."""
     f = request.FILES.get("file")
     if not f:
         return HttpResponseBadRequest("Missing 'file'")
 
     blob = b"".join(chunk for chunk in f.chunks())
 
-    # Process
     try:
-        # Toggle YOLO with query param ?yolo=1
         use_yolo = request.GET.get("yolo") == "1"
         processed = _process_with_opencv(blob, use_yolo=use_yolo)
         status, error = "DONE", ""
     except Exception as e:
         processed, status, error = None, "ERROR", str(e)
 
-    # Save DB record
     job = VideoJob.objects.create(
         owner=request.user,
         filename=f.name,
@@ -165,7 +144,6 @@ def upload_view(request):
         error=error,
     )
 
-    # Signed URLs
     token = _signer.sign(str(job.id))
     play_url = _abs(request, reverse("video_get", args=[job.id])) + f"?t={token}"
     download_url = play_url + "&download=1"
@@ -183,19 +161,17 @@ def upload_view(request):
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])  # signed token secures access
+@permission_classes([AllowAny])  # secured by signed token
 def video_view(request, job_id):
-    """Return processed video if token matches."""
+    """Return processed video with HTTP Range support."""
     token = request.GET.get("t")
     if not token:
         return HttpResponseBadRequest("Missing token")
 
     try:
         unsigned = _signer.unsign(token, max_age=600)
-    except SignatureExpired:
-        return HttpResponseBadRequest("Token expired")
-    except BadSignature:
-        return HttpResponseBadRequest("Invalid token")
+    except (SignatureExpired, BadSignature):
+        return HttpResponseBadRequest("Invalid/expired token")
 
     if unsigned != str(job_id):
         return HttpResponseBadRequest("Token mismatch")
@@ -208,10 +184,25 @@ def video_view(request, job_id):
     if not job.result_mp4:
         return HttpResponseNotFound("No processed video available")
 
-    resp = HttpResponse(job.result_mp4, content_type="video/mp4")
-    if request.GET.get("download") == "1":
-        resp["Content-Disposition"] = f'attachment; filename="{job.filename}"'
-    else:
-        resp["Content-Disposition"] = f'inline; filename="{job.filename}"'
-    resp["Cache-Control"] = "no-store"
+    blob = job.result_mp4
+    size = len(blob)
+
+    range_header = request.headers.get("Range")
+    if range_header:
+        # Example: Range: bytes=0-1023
+        start, end = range_header.replace("bytes=", "").split("-")
+        start = int(start) if start else 0
+        end = int(end) if end else size - 1
+        end = min(end, size - 1)
+
+        chunk = blob[start:end + 1]
+        resp = HttpResponse(chunk, status=206, content_type="video/mp4")
+        resp["Content-Range"] = f"bytes {start}-{end}/{size}"
+        resp["Accept-Ranges"] = "bytes"
+        resp["Content-Length"] = str(len(chunk))
+        return resp
+
+    # No Range: return entire video
+    resp = HttpResponse(blob, content_type="video/mp4")
+    resp["Content-Length"] = str(size)
     return resp
