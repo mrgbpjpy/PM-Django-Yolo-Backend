@@ -1,31 +1,30 @@
 # ---- Base ----
 FROM python:3.11-slim
 
-# Install system deps: ffmpeg + build tools
+# Install system deps: ffmpeg + build tools for psycopg2, etc.
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libpq-dev \
     gcc \
-    && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 
-# Set workdir
 WORKDIR /app
 
-# Copy Python deps
+# Python deps first (layer cache)
 COPY requirements.txt .
-
-# Install Python deps
 RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+ && pip install --no-cache-dir -r requirements.txt
 
-# Copy project files
+# App source
 COPY . .
 
-# Collect static files (safe fallback)
+# Collect static (don’t fail if none)
 RUN python manage.py collectstatic --noinput || true
 
-# Expose default port
+# Make entrypoint executable (covers web-UI commits)
+RUN chmod +x /app/entrypoint.sh
+
 EXPOSE 8000
 
-# ✅ Use shell form so $PORT expands correctly
-CMD sh -c "gunicorn mysite.wsgi:application --bind 0.0.0.0:${PORT:-8000}"
+# Use entrypoint so $PORT expands at runtime
+CMD ["./entrypoint.sh"]
